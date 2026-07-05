@@ -2,9 +2,10 @@
 # Downloads the macOS binaries the sidecar drives (yt-dlp, ffmpeg, deno)
 # into soundmatik-sidecar/bin/mac/. Re-run any time to update them.
 #
-# ffmpeg/ffprobe come from evermeet.cx (x86_64; runs on Apple Silicon via
-# Rosetta). If you want native arm64 ffmpeg instead, install it via
-# `brew install ffmpeg` and copy the binaries into bin/mac/ yourself.
+# ffmpeg/ffprobe are native arm64 static builds from ffmpeg.martin-riedl.de
+# (Apple Silicon only — this package does not support Intel Macs). deno is
+# arch-matched and yt-dlp is universal, so the whole bundle runs arm64-native
+# without Rosetta.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,9 +27,9 @@ curl -sL -o "$DL/deno.zip" "https://github.com/denoland/deno/releases/latest/dow
 unzip -oq "$DL/deno.zip" -d "$DL/deno-tmp"
 cp "$DL/deno-tmp/deno" "$BIN/"
 
-echo "Downloading ffmpeg + ffprobe (evermeet.cx)..."
-curl -sL -o "$DL/ffmpeg.zip" "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
-curl -sL -o "$DL/ffprobe.zip" "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+echo "Downloading ffmpeg + ffprobe (arm64 static, martin-riedl.de)..."
+curl -sL -o "$DL/ffmpeg.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
+curl -sL -o "$DL/ffprobe.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip"
 unzip -oq "$DL/ffmpeg.zip" -d "$BIN"
 unzip -oq "$DL/ffprobe.zip" -d "$BIN"
 
