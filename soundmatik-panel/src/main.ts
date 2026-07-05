@@ -13,6 +13,11 @@ declare const require: (module: string) => any;
 const ppro = require("premierepro") as premierepro;
 const uxp = require("uxp");
 
+const VERSION = "1.0.0"; // keep in sync with manifest.json
+const RELEASES_API =
+  "https://api.github.com/repos/burskozbekov/soundmatik/releases/latest";
+const RELEASES_PAGE = "https://github.com/burskozbekov/soundmatik/releases/latest";
+
 const SIDECAR_BASE = "http://127.0.0.1:41320";
 const BIN_NAME = "SOUND_EFFECTS";
 const POLL_INTERVAL_MS = 1000;
@@ -402,5 +407,66 @@ $<HTMLElement>("site-link").addEventListener("click", () => {
     /* non-critical */
   }
 });
+
+// ---------------------------------------------------------------------------
+// Update check (GitHub Releases)
+
+function isNewerVersion(candidate: string, current: string): boolean {
+  const pa = candidate.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = current.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+  }
+  return false;
+}
+
+let updateAvailable = false;
+const updateLink = $<HTMLElement>("update-link");
+
+async function checkForUpdates(): Promise<void> {
+  if (updateAvailable) {
+    // Second click: take the user to the download page.
+    try {
+      uxp.shell.openExternal(RELEASES_PAGE);
+    } catch {
+      /* non-critical */
+    }
+    return;
+  }
+  updateLink.textContent = "Checking…";
+  try {
+    const res = await fetchWithTimeout(RELEASES_API, undefined, 8000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    // tag like "v1.2.0" (possibly with a suffix) -> "1.2.0"
+    const latest = String(body.tag_name || "")
+      .replace(/^v/i, "")
+      .split("-")[0];
+    if (latest && isNewerVersion(latest, VERSION)) {
+      updateAvailable = true;
+      updateLink.textContent = `Get v${latest} ↗`;
+      setStatus(
+        "done",
+        "Update",
+        `soundMatik v${latest} is available — click "Get v${latest}" below to download it.`
+      );
+    } else {
+      updateLink.textContent = "Up to date ✓";
+      setTimeout(() => {
+        updateLink.textContent = "Check for updates";
+      }, 4000);
+    }
+  } catch {
+    // Offline or rate-limited — just point at the releases page.
+    updateAvailable = true;
+    updateLink.textContent = "Open releases page ↗";
+  }
+}
+
+updateLink.addEventListener("click", () => {
+  void checkForUpdates();
+});
+$<HTMLElement>("version").textContent = `v${VERSION}`;
 
 setFormat(format);

@@ -1,10 +1,16 @@
-# Builds the friend-shareable soundMatik package:
+# Builds the shareable Windows package:
 #   dist-share\soundMatik\
-#     soundMatik.ccx        (panel — double-click installs via Creative Cloud)
+#     panel\                (UXP panel: manifest, index.html, dist, icons)
 #     helper\               (sidecar exe + yt-dlp/ffmpeg/deno binaries)
-#     KURULUM.bat           (one-click installer)
-#     OKU-BENI.txt          (Turkish install/usage notes)
-#   dist-share\soundMatik-kurulum.zip
+#     INSTALL.bat           (one-click installer)
+#     UNINSTALL.bat
+#     README.txt
+#   dist-share\soundMatik-windows.zip
+#
+# Install mechanism: the panel folder is copied into
+#   %APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel
+# which Premiere scans automatically (same mechanism as other locally
+# installed UXP plugins) — no Creative Cloud / ccx involved.
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot   # repo root (G:\SOUNDMATIK)
@@ -13,77 +19,114 @@ $pkg = Join-Path $out "soundMatik"
 if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
 New-Item -ItemType Directory -Force $pkg | Out-Null
 
-Write-Host "1/4 Panel derleniyor..."
+Write-Host "1/4 Building panel..."
 Push-Location (Join-Path $root "soundmatik-panel")
 npm run build | Out-Null
 Pop-Location
 
-Write-Host "2/4 soundMatik.ccx paketleniyor..."
-$stage = Join-Path $out "_ccx-stage"
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force $stage, (Join-Path $stage "dist") | Out-Null
-Copy-Item (Join-Path $root "soundmatik-panel\manifest.json") $stage
-Copy-Item (Join-Path $root "soundmatik-panel\index.html") $stage
-Copy-Item (Join-Path $root "soundmatik-panel\dist\index.js") (Join-Path $stage "dist")
-Copy-Item (Join-Path $root "soundmatik-panel\icons") $stage -Recurse
-$ccxZip = Join-Path $out "soundMatik.zip"
-if (Test-Path $ccxZip) { Remove-Item $ccxZip -Force }
-Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $ccxZip
-Move-Item $ccxZip (Join-Path $pkg "soundMatik.ccx") -Force
-Remove-Item $stage -Recurse -Force
+Write-Host "2/4 Staging panel..."
+$panelDst = Join-Path $pkg "panel"
+New-Item -ItemType Directory -Force $panelDst, (Join-Path $panelDst "dist") | Out-Null
+Copy-Item (Join-Path $root "soundmatik-panel\manifest.json") $panelDst
+Copy-Item (Join-Path $root "soundmatik-panel\index.html") $panelDst
+Copy-Item (Join-Path $root "soundmatik-panel\dist\index.js") (Join-Path $panelDst "dist")
+Copy-Item (Join-Path $root "soundmatik-panel\icons") $panelDst -Recurse
+# the 1024px sources aren't needed at runtime
+Remove-Item (Join-Path $panelDst "icons\source") -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host "3/4 Helper kopyalaniyor..."
+Write-Host "3/4 Staging helper..."
 $helper = Join-Path $pkg "helper"
 New-Item -ItemType Directory -Force (Join-Path $helper "bin\win") | Out-Null
 Copy-Item (Join-Path $root "soundmatik-sidecar\target\release\soundmatik-sidecar.exe") $helper
 Copy-Item (Join-Path $root "soundmatik-sidecar\bin\win\*") (Join-Path $helper "bin\win")
 
-Write-Host "4/4 Kurulum dosyalari + zip..."
+Write-Host "4/4 Writing installer files + zip..."
 @'
 @echo off
-echo soundMatik kurulumu basliyor...
+echo Installing soundMatik...
+echo.
+
+rem -- helper (downloader) ---------------------------------------------------
 taskkill /IM soundmatik-sidecar.exe /F >nul 2>&1
-set "DEST=%LOCALAPPDATA%\soundMatik"
-xcopy /E /I /Y "%~dp0helper" "%DEST%" >nul
-echo Yardimci program kuruldu: %DEST%
+set "HELPER_DEST=%LOCALAPPDATA%\soundMatik"
+xcopy /E /I /Y "%~dp0helper" "%HELPER_DEST%" >nul
+if errorlevel 1 goto :fail
+echo   Helper installed:  %HELPER_DEST%
+
+rem -- Premiere UXP panel ----------------------------------------------------
+set "PANEL_DEST=%APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel"
+if exist "%PANEL_DEST%" rmdir /S /Q "%PANEL_DEST%"
+xcopy /E /I /Y "%~dp0panel" "%PANEL_DEST%" >nul
+if errorlevel 1 goto :fail
+echo   Panel installed:   %PANEL_DEST%
+
 echo.
-echo Simdi panel yuklenecek. Acilan Creative Cloud penceresinden onaylayin.
-start "" "%~dp0soundMatik.ccx"
+echo Done! Now:
+echo   1. Restart Premiere Pro (close it completely, then open it again)
+echo   2. Open the panel:  Window ^> UXP Plugins ^> soundMatik
 echo.
-echo Bitti! Premiere'i (aciksa) yeniden baslatin ve
-echo Window - Extensions (UXP) - soundMatik menusunden paneli acin.
 pause
-'@ | Out-File (Join-Path $pkg "KURULUM.bat") -Encoding ascii
+exit /b 0
+
+:fail
+echo.
+echo Something went wrong during the copy step. Try running INSTALL.bat again.
+pause
+exit /b 1
+'@ | Out-File (Join-Path $pkg "INSTALL.bat") -Encoding ascii
 
 @'
-soundMatik — video linkinden ses indirme paneli (Premiere Pro 2026+)
+@echo off
+echo Removing soundMatik...
+taskkill /IM soundmatik-sidecar.exe /F >nul 2>&1
+rmdir /S /Q "%LOCALAPPDATA%\soundMatik" 2>nul
+rmdir /S /Q "%APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel" 2>nul
+echo Done. Restart Premiere Pro to make it disappear from the menu.
+echo (Downloaded audio files in your projects are NOT touched.)
+pause
+'@ | Out-File (Join-Path $pkg "UNINSTALL.bat") -Encoding ascii
+
+@'
+soundMatik - pull audio from any online video straight into Premiere Pro
 by Sevki Bugra Ozbek · catheadai.com
 
-KURULUM
-1) Bu klasordeki KURULUM.bat dosyasina cift tiklayin.
-2) Acilan Creative Cloud penceresinde eklenti kurulumunu onaylayin.
-   ("Dogrulanmamis eklenti" uyarisi gelirse kabul edin — kisisel paylasim.)
-3) Premiere Pro'yu yeniden baslatin.
-4) Premiere'de: Window > Extensions (UXP) > soundMatik
+REQUIREMENTS
+- Adobe Premiere Pro 2026 (version 26.0 or newer), Windows 10/11
 
-KULLANIM
-- Video linkini yapistirin, WAV veya MP3 secin, DOWNLOAD AUDIO'ya basin.
-- Ses dosyasi <proje klasoru>\SOUND_EFFECTS\ icine iner ve Project
-  panelindeki SOUND_EFFECTS bin'ine otomatik eklenir.
-- Projenizin en az bir kez kaydedilmis olmasi gerekir.
+INSTALL
+1) Double-click INSTALL.bat
+2) Restart Premiere Pro completely
+3) In Premiere:  Window > UXP Plugins > soundMatik
 
-SORUN GIDERME
-- "Can't reach the soundMatik helper" derse: %LOCALAPPDATA%\soundMatik
-  klasorundeki soundmatik-sidecar.exe dosyasina bir kez cift tiklayip
-  tekrar deneyin.
-- YouTube indirmeleri bozulursa yt-dlp guncellemesi gerekiyordur —
-  paketi gonderen kisiden yeni surum isteyin.
-'@ | Out-File (Join-Path $pkg "OKU-BENI.txt") -Encoding utf8
+USAGE
+- Paste a video link, pick WAV or MP3, hit DOWNLOAD AUDIO.
+- The audio file is saved to <your project folder>\SOUND_EFFECTS\ and
+  imported into a SOUND_EFFECTS bin in the Project panel automatically.
+- Your project must have been saved at least once.
 
-$zip = Join-Path $out "soundMatik-kurulum.zip"
+UPDATES
+- Click "Check for updates" at the bottom of the panel. If a newer version
+  exists, download the new zip and run INSTALL.bat again - it replaces the
+  old version cleanly.
+
+TROUBLESHOOTING
+- Panel not in the menu? Make sure Premiere was fully closed and reopened
+  after install.
+- "Can't reach the soundMatik helper": double-click
+  %LOCALAPPDATA%\soundMatik\soundmatik-sidecar.exe once, then try again.
+- A specific video fails? Some videos are private, age-gated or login-only;
+  those can't be downloaded. If ALL YouTube videos suddenly fail, grab the
+  newest soundMatik zip (yt-dlp inside needs updating) via
+  https://github.com/burskozbekov/soundmatik/releases
+
+UNINSTALL
+- Double-click UNINSTALL.bat
+'@ | Out-File (Join-Path $pkg "README.txt") -Encoding ascii
+
+$zip = Join-Path $out "soundMatik-windows.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $pkg -DestinationPath $zip
 
-Write-Host "Tamam:"
-Write-Host "  Klasor: $pkg"
+Write-Host "Done:"
+Write-Host "  Folder: $pkg"
 Write-Host ("  Zip   : {0}  ({1:N0} MB)" -f $zip, ((Get-Item $zip).Length / 1MB))
