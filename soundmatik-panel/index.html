@@ -13,6 +13,32 @@
         box-sizing: border-box;
       }
 
+      .brand-header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #383838;
+      }
+
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        flex: 0 0 auto;
+      }
+
+      .brand-word {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        color: var(--uxp-host-text-color, #eaeaea);
+      }
+
+      .brand-word .mk {
+        color: #4ea1f7;
+      }
+
       .field-label {
         display: block;
         margin: 0 0 5px;
@@ -150,6 +176,11 @@
     </style>
   </head>
   <body>
+    <div class="brand-header">
+      <img class="brand-logo" src="icons/icon@2x.png" alt="" />
+      <span class="brand-word">sound<span class="mk">Matik</span></span>
+    </div>
+
     <div class="section">
       <span class="field-label">VIDEO URL</span>
       <input id="url" type="text" placeholder="Paste a video link (YouTube, etc.)" spellcheck="false" />
