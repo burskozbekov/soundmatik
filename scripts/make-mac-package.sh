@@ -104,62 +104,101 @@ spctl -a -vvv --type exec "$APP" || true
 
 # ── 8. Build the .ccx (panel — JS/HTML only, no notarization needed) ───────
 log "Packaging soundMatik.ccx ..."
-PKG="$OUT/soundMatik"
-mkdir -p "$PKG"
 STAGE="$OUT/_ccx"; rm -rf "$STAGE"; mkdir -p "$STAGE/dist"
 cp "$PANEL/manifest.json" "$PANEL/index.html" "$STAGE/"
 cp "$PANEL/dist/index.js" "$STAGE/dist/"
 cp -R "$PANEL/icons" "$STAGE/"
-( cd "$STAGE" && ditto -c -k --keepParent . "$OUT/soundMatik.ccx.zip" >/dev/null )
-# ditto --keepParent nests one dir; re-zip flat instead:
-rm -f "$OUT/soundMatik.ccx.zip"
-( cd "$STAGE" && zip -qr "$PKG/soundMatik.ccx" . )
+( cd "$STAGE" && zip -qr "$OUT/soundMatik.ccx" . )
 rm -rf "$STAGE"
 
-# ── 9. Assemble share package ──────────────────────────────────────────────
-log "Assembling share package..."
-cp -R "$APP" "$PKG/"
-
-cat > "$PKG/KURULUM.command" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")"
-echo "soundMatik kuruluyor..."
-DEST="$HOME/Library/Application Support/soundMatik"
-mkdir -p "$DEST"
-pkill -f soundmatik-sidecar 2>/dev/null || true
-rm -rf "$DEST/soundMatik Helper.app"
-cp -R "soundMatik Helper.app" "$DEST/"
-xattr -dr com.apple.quarantine "$DEST/soundMatik Helper.app" 2>/dev/null || true
-echo "Yardimci program kuruldu: $DEST"
-echo "Panel yukleniyor (Creative Cloud penceresini onaylayin)..."
-open "soundMatik.ccx"
-echo ""
-echo "Bitti! Premiere Pro'yu yeniden baslatin, sonra:"
-echo "Window > Extensions (UXP) > soundMatik"
-read -n 1 -s -r -p "Kapatmak icin bir tusa basin..."
+# ── 9. Build the installer applet ──────────────────────────────────────────
+# A .command shell script CANNOT be notarized (Apple only notarizes Mach-O /
+# .app / .pkg / .dmg), and macOS 15+ removed the right-click▸Open bypass, so
+# an unsigned script greets users with a "Move to Trash" dialog. Instead we
+# ship a signed+notarized AppleScript applet with the helper .app and the
+# .ccx embedded in its Resources — double-click, zero warnings.
+log "Building Install soundMatik.app ..."
+INSTALLER="$OUT/Install soundMatik.app"
+rm -rf "$INSTALLER"
+OSA="$OUT/_installer.applescript"
+cat > "$OSA" <<'EOF'
+on run
+	-- Raise the default 120s AppleEvent limit: an unattended dialog or a slow
+	-- Creative Cloud start would otherwise throw -1712 ("AppleEvent timed out").
+	with timeout of 3600 seconds
+		set appPath to POSIX path of (path to me)
+		set res to appPath & "Contents/Resources/"
+		set destRoot to (POSIX path of (path to application support folder from user domain)) & "soundMatik/"
+		do shell script "mkdir -p " & quoted form of destRoot
+		do shell script "pkill -f soundmatik-sidecar 2>/dev/null; true"
+		do shell script "rm -rf " & quoted form of (destRoot & "soundMatik Helper.app")
+		do shell script "cp -R " & quoted form of (res & "soundMatik Helper.app") & " " & quoted form of destRoot
+		do shell script "xattr -dr com.apple.quarantine " & quoted form of (destRoot & "soundMatik Helper.app") & " 2>/dev/null; true"
+		-- Pre-launch the helper now so macOS does its first-run verification
+		-- during install (while the user expects to wait), not on first download.
+		do shell script "open " & quoted form of (destRoot & "soundMatik Helper.app")
+		try
+			do shell script "open " & quoted form of (res & "soundMatik.ccx")
+			display dialog "soundMatik is installed!" & return & return & "1) Approve the Creative Cloud window that just opened." & return & "2) Restart Premiere Pro." & return & "3) Open: Window > Extensions (UXP) > soundMatik" buttons {"OK"} default button "OK" with title "soundMatik" with icon note giving up after 600
+		on error
+			display dialog "The helper is installed, but the panel installer could not be opened." & return & return & "Make sure Adobe Creative Cloud is installed and running, then double-click this installer again." buttons {"OK"} default button "OK" with title "soundMatik" with icon caution giving up after 600
+		end try
+	end timeout
+end run
 EOF
-chmod +x "$PKG/KURULUM.command"
+osacompile -o "$INSTALLER" "$OSA"
+rm -f "$OSA"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.soundmatik.installer" "$INSTALLER/Contents/Info.plist" \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.soundmatik.installer" "$INSTALLER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName Install soundMatik" "$INSTALLER/Contents/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleName string Install soundMatik" "$INSTALLER/Contents/Info.plist"
+cp -R "$APP" "$INSTALLER/Contents/Resources/"
+mv "$OUT/soundMatik.ccx" "$INSTALLER/Contents/Resources/"
 
-cat > "$PKG/OKU-BENI.txt" <<'EOF'
-soundMatik — video linkinden ses indirme paneli (Premiere Pro 2026+)
-by Sevki Bugra Ozbek · catheadai.com   (macOS surumu)
+log "Codesigning the installer..."
+codesign --force --options runtime --timestamp --sign "$SM_SIGN_ID" "$INSTALLER"
+codesign --verify --deep --strict --verbose=2 "$INSTALLER" || die "installer codesign verify failed"
 
-KURULUM
-1) KURULUM.command dosyasina cift tiklayin.
-   Eger "acilamiyor / gelistirici dogrulanamadi" derse: sag tik > Ac > Ac.
-   (Alternatif: Terminal'de  bash KURULUM.command  yazin.)
-2) Acilan Creative Cloud penceresinde eklenti kurulumunu onaylayin.
-3) Premiere Pro'yu yeniden baslatin.
-4) Premiere'de: Window > Extensions (UXP) > soundMatik
+log "Notarizing the installer..."
+ZIP="$OUT/_notarize-installer.zip"
+ditto -c -k --keepParent "$INSTALLER" "$ZIP"
+if ! xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait; then
+  echo "Installer notarization failed — see: xcrun notarytool history/log ..."
+  die "notarytool rejected the installer"
+fi
+rm -f "$ZIP"
+xcrun stapler staple "$INSTALLER"
+xcrun stapler validate "$INSTALLER"
+spctl -a -vvv --type exec "$INSTALLER" || true
 
-Yardimci program imzali ve Apple tarafindan onaylidir (notarized), bu yuzden
-calisrken ek bir guvenlik uyarisi cikmaz.
+# ── 10. Assemble share package ─────────────────────────────────────────────
+log "Assembling share package..."
+PKG="$OUT/soundMatik"
+rm -rf "$PKG"; mkdir -p "$PKG"
+cp -R "$INSTALLER" "$PKG/"
 
-KULLANIM
-- Video linkini yapistirin, WAV/MP3 secin, DOWNLOAD AUDIO'ya basin.
-- Ses dosyasi <proje klasoru>/SOUND_EFFECTS/ icine iner ve Project panelindeki
-  SOUND_EFFECTS bin'ine otomatik eklenir.
-- Projenizin en az bir kez kaydedilmis olmasi gerekir.
+cat > "$PKG/README.txt" <<'EOF'
+soundMatik — download audio from any video link (Premiere Pro 2026+)
+by Sevki Bugra Ozbek · catheadai.com   (macOS version)
+
+REQUIREMENT: Apple Silicon (M1 or newer) Mac.
+(Intel Macs are not supported.)
+
+INSTALL
+1) Double-click "Install soundMatik.app".
+   (The first launch can take 10-20 seconds while macOS verifies the app —
+   that's normal, just wait.)
+2) Approve the plugin install in the Creative Cloud window that opens.
+3) Restart Premiere Pro.
+4) In Premiere: Window > Extensions (UXP) > soundMatik
+
+Everything is signed and notarized by Apple — no security warnings.
+
+USAGE
+- Paste a video link, choose WAV/MP3, click DOWNLOAD AUDIO.
+- The audio file lands in <project folder>/SOUND_EFFECTS/ and is added
+  automatically to the SOUND_EFFECTS bin in the Project panel.
+- Your project must have been saved at least once.
 EOF
 
 FINAL_ZIP="$ROOT/dist-share/soundMatik-mac.zip"
@@ -167,6 +206,7 @@ rm -f "$FINAL_ZIP"
 ( cd "$OUT" && zip -qr "$FINAL_ZIP" "soundMatik" )
 
 log "Done."
-echo "  App (signed+notarized+stapled): $APP"
+echo "  Helper app (signed+notarized+stapled):    $APP"
+echo "  Installer app (signed+notarized+stapled): $INSTALLER"
 echo "  Share folder: $PKG"
 echo "  Share zip:    $FINAL_ZIP"

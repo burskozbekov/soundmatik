@@ -51,6 +51,19 @@ const STALE_TMP_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 static LOG_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
 
 fn init_log(exe_dir: &Path) {
+    // macOS: the exe lives inside the signed .app bundle — writing a log next
+    // to it would modify the bundle after signing (breaking strict codesign /
+    // Gatekeeper re-validation), so log under ~/Library/Logs instead.
+    #[cfg(target_os = "macos")]
+    let path = {
+        let dir = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| exe_dir.to_path_buf())
+            .join("Library/Logs/soundMatik");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("soundmatik-sidecar.log")
+    };
+    #[cfg(not(target_os = "macos"))]
     let path = exe_dir.join("soundmatik-sidecar.log");
     let file = std::fs::OpenOptions::new()
         .create(true)

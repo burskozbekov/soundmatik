@@ -105,8 +105,10 @@ once** (the audio is stored next to the `.prproj`; the panel tells you if not).
 
 Everything is cross-platform by construction. Because macOS Gatekeeper blocks
 unsigned binaries, the Mac helper ships as a **signed, notarized `.app` bundle**
-(`soundMatik Helper.app`) — no security warnings for whoever installs it. This
-needs an Apple Developer account and must run **on a Mac**:
+(`soundMatik Helper.app`), wrapped in a **signed, notarized installer applet**
+(`Install soundMatik.app`) — no security warnings at any step. This needs an
+Apple Developer account and must run **on a Mac**. The macOS package is
+**Apple Silicon only** (M1+); Intel Macs are not supported.
 
 ```bash
 # one-time: rustup, xcode-select --install, node, a Developer ID Application cert,
@@ -116,10 +118,14 @@ export SM_NOTARY_PROFILE="soundmatik-notary"
 ./scripts/make-mac-package.sh
 ```
 
-The script fetches the mac binaries, builds the sidecar, assembles the `.app`
+The script fetches the mac binaries, builds the sidecar, assembles the helper `.app`
 (sidecar in `Contents/MacOS/`, yt-dlp/ffmpeg/deno in `Contents/Resources/bin/mac/`),
 codesigns everything with Hardened Runtime + `soundmatik-sidecar/mac/entitlements.plist`,
-notarizes via `notarytool`, staples, and produces `dist-share/soundMatik-mac.zip`.
+notarizes via `notarytool` and staples. It then builds `Install soundMatik.app` (an
+AppleScript applet with the helper `.app` and the `.ccx` embedded), signs + notarizes
+that too, and produces `dist-share/soundMatik-mac.zip` (two notarization submissions
+total: helper, then installer). The installer copies the helper into
+`~/Library/Application Support/soundMatik/`, pre-launches it, and opens the `.ccx`.
 
 The bundled runtimes need JIT/unsigned-memory entitlements (deno's V8, yt-dlp's
 embedded Python). If notarization rejects a specific binary, read the notary log
@@ -127,8 +133,9 @@ embedded Python). If notarization rejects a specific binary, read the notary log
 default keys cover the usual cases but this is the one step that may need a pass
 or two the first time.
 
-ffmpeg comes from evermeet.cx (x86_64; fine under Rosetta — or drop a Homebrew
-arm64 build into `bin/mac/` before running the script).
+ffmpeg/ffprobe are native arm64 static builds from ffmpeg.martin-riedl.de, so the
+whole bundle runs arm64-native (no Rosetta). This is why the macOS package is Apple
+Silicon only.
 
 ## Distribution (GitHub Releases)
 
@@ -138,7 +145,7 @@ Personal tool, shared with friends via a GitHub Release:
   (unsigned — friends click through SmartScreen's *More info → Run anyway* once,
   and may need to allow `yt-dlp.exe` past an antivirus false-positive).
 - **macOS:** `scripts/make-mac-package.sh` → `dist-share/soundMatik-mac.zip`
-  (signed + notarized — no warnings).
+  (signed + notarized — no warnings; friends just double-click `Install soundMatik.app`).
 
 The `.ccx` panel is JS/HTML only (no native code, no notarization needed). Whether
 Creative Cloud accepts a self-distributed unsigned `.ccx` via double-click is worth
