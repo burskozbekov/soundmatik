@@ -123,9 +123,8 @@ rm -rf "$INSTALLER"
 OSA="$OUT/_installer.applescript"
 cat > "$OSA" <<'EOF'
 on run
-	-- Raise the default 120s AppleEvent limit: copying the ~240MB helper and
-	-- waiting on Creative Cloud can exceed it and throw -1712 ("AppleEvent
-	-- timed out"), even though the work actually completes.
+	-- Raise the default 120s AppleEvent limit: an unattended dialog or a slow
+	-- Creative Cloud start would otherwise throw -1712 ("AppleEvent timed out").
 	with timeout of 3600 seconds
 		set appPath to POSIX path of (path to me)
 		set res to appPath & "Contents/Resources/"
@@ -138,8 +137,12 @@ on run
 		-- Pre-launch the helper now so macOS does its first-run verification
 		-- during install (while the user expects to wait), not on first download.
 		do shell script "open " & quoted form of (destRoot & "soundMatik Helper.app")
-		do shell script "open " & quoted form of (res & "soundMatik.ccx")
-		display dialog "soundMatik is installed!" & return & return & "1) Approve the Creative Cloud window that just opened." & return & "2) Restart Premiere Pro." & return & "3) Open: Window > Extensions (UXP) > soundMatik" buttons {"OK"} default button "OK" with title "soundMatik" with icon note
+		try
+			do shell script "open " & quoted form of (res & "soundMatik.ccx")
+			display dialog "soundMatik is installed!" & return & return & "1) Approve the Creative Cloud window that just opened." & return & "2) Restart Premiere Pro." & return & "3) Open: Window > Extensions (UXP) > soundMatik" buttons {"OK"} default button "OK" with title "soundMatik" with icon note giving up after 600
+		on error
+			display dialog "The helper is installed, but the panel installer could not be opened." & return & return & "Make sure Adobe Creative Cloud is installed and running, then double-click this installer again." buttons {"OK"} default button "OK" with title "soundMatik" with icon caution giving up after 600
+		end try
 	end timeout
 end run
 EOF
