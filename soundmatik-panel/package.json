@@ -1,0 +1,16 @@
+{
+  "name": "soundmatik-panel",
+  "private": true,
+  "version": "1.0.0",
+  "description": "soundMatik UXP panel for Adobe Premiere Pro — pull audio from online videos into the project",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --outfile=dist/index.js --format=cjs --platform=neutral --target=es2020 --external:premierepro --external:uxp",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@adobe/premierepro": "^26.3.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.5.0"
+  }
+}

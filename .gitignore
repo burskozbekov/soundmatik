@@ -1,0 +1,13 @@
+# build artifacts
+soundmatik-sidecar/target/
+soundmatik-panel/node_modules/
+soundmatik-panel/dist/
+
+# bundled/downloaded binaries (re-fetch with soundmatik-sidecar/scripts/fetch-binaries.*)
+soundmatik-sidecar/bin/
+
+# share packages (regenerate with scripts/make-share-package.ps1)
+dist-share/
+
+# logs
+*.log

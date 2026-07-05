@@ -1,0 +1,8 @@
+# Shell scripts must stay LF or they break on macOS/Linux
+*.sh text eol=lf
+*.command text eol=lf
+# Windows scripts stay CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+# Binary assets
+*.png binary

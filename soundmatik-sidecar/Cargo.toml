@@ -1,0 +1,17 @@
+[package]
+name = "soundmatik-sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "Local helper server for the soundMatik Premiere Pro panel: downloads online video audio via bundled yt-dlp/ffmpeg/deno"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "fs", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
