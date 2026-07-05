@@ -150,9 +150,16 @@ fn resolve_bin_dir(exe_dir: &Path) -> Option<PathBuf> {
     let mut cursor = Some(exe_dir);
     for _ in 0..5 {
         let dir = cursor?;
+        // Flat/dev layout: <dir>/bin/<platform>/
         let candidate = dir.join("bin").join(PLATFORM_BIN_SUBDIR);
         if candidate.join(YTDLP_NAME).is_file() {
             return Some(candidate);
+        }
+        // macOS .app bundle: exe is in Contents/MacOS/, binaries in
+        // Contents/Resources/bin/mac/ — check the sibling Resources dir.
+        let resources = dir.join("Resources").join("bin").join(PLATFORM_BIN_SUBDIR);
+        if resources.join(YTDLP_NAME).is_file() {
+            return Some(resources);
         }
         cursor = dir.parent();
     }

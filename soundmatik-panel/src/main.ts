@@ -148,7 +148,11 @@ async function getSidecarCandidatePaths(): Promise<string[]> {
     if (home.includes("\\")) {
       candidates.push(`${home}\\AppData\\Local\\soundMatik\\soundmatik-sidecar.exe`);
     } else {
-      candidates.push(`${home}/Library/Application Support/soundMatik/soundmatik-sidecar`);
+      // On macOS the helper ships as a .app bundle so `open` actually launches
+      // it (opening a raw Unix executable would not run it).
+      candidates.push(
+        `${home}/Library/Application Support/soundMatik/soundMatik Helper.app`
+      );
     }
   } catch {
     /* os module unavailable — dev path only */

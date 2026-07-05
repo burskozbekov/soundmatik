@@ -101,18 +101,52 @@ once** (the audio is stored next to the `.prproj`; the panel tells you if not).
   If auto-launch is blocked, double-click that exe yourself; everything else
   works the same.
 
-## macOS notes
+## macOS build (signed + notarized)
 
-Untested here, but everything is cross-platform by construction:
+Everything is cross-platform by construction. Because macOS Gatekeeper blocks
+unsigned binaries, the Mac helper ships as a **signed, notarized `.app` bundle**
+(`soundMatik Helper.app`) — no security warnings for whoever installs it. This
+needs an Apple Developer account and must run **on a Mac**:
 
 ```bash
-./soundmatik-sidecar/scripts/fetch-binaries.sh   # binaries → bin/mac/
-cd soundmatik-sidecar && cargo build --release
+# one-time: rustup, xcode-select --install, node, a Developer ID Application cert,
+# and a stored notary profile (see the header of the script for exact commands)
+export SM_SIGN_ID="Developer ID Application: Your Name (TEAMID)"
+export SM_NOTARY_PROFILE="soundmatik-notary"
+./scripts/make-mac-package.sh
 ```
 
-ffmpeg comes from evermeet.cx (x86_64; fine under Rosetta — or drop in a Homebrew
-arm64 build). If the panel can't auto-start the bare executable on macOS, start it
-manually (`./target/release/soundmatik-sidecar`) — it lingers 15 min per use.
+The script fetches the mac binaries, builds the sidecar, assembles the `.app`
+(sidecar in `Contents/MacOS/`, yt-dlp/ffmpeg/deno in `Contents/Resources/bin/mac/`),
+codesigns everything with Hardened Runtime + `soundmatik-sidecar/mac/entitlements.plist`,
+notarizes via `notarytool`, staples, and produces `dist-share/soundMatik-mac.zip`.
+
+The bundled runtimes need JIT/unsigned-memory entitlements (deno's V8, yt-dlp's
+embedded Python). If notarization rejects a specific binary, read the notary log
+(`xcrun notarytool log <id> ...`) and adjust `entitlements.plist` — the three
+default keys cover the usual cases but this is the one step that may need a pass
+or two the first time.
+
+ffmpeg comes from evermeet.cx (x86_64; fine under Rosetta — or drop a Homebrew
+arm64 build into `bin/mac/` before running the script).
+
+## Distribution (GitHub Releases)
+
+Personal tool, shared with friends via a GitHub Release:
+
+- **Windows:** `scripts/make-share-package.ps1` → `dist-share/soundMatik-kurulum.zip`
+  (unsigned — friends click through SmartScreen's *More info → Run anyway* once,
+  and may need to allow `yt-dlp.exe` past an antivirus false-positive).
+- **macOS:** `scripts/make-mac-package.sh` → `dist-share/soundMatik-mac.zip`
+  (signed + notarized — no warnings).
+
+The `.ccx` panel is JS/HTML only (no native code, no notarization needed). Whether
+Creative Cloud accepts a self-distributed unsigned `.ccx` via double-click is worth
+testing on your own machine first; the guaranteed fallback is installing the panel
+through the UXP Developer Tool, same as the dev flow above.
+
+> The Windows release bundles a GPL ffmpeg build (yt-dlp/FFmpeg-Builds). Its source
+> is at <https://github.com/yt-dlp/FFmpeg-Builds> / <https://ffmpeg.org>.
 
 ## Troubleshooting
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Entitlements for the bundled runtimes under Hardened Runtime (required for
+    notarization). deno runs a V8 JIT; yt-dlp is a PyInstaller bundle that
+    maps executable memory and loads its own unsigned dylibs. If notarization
+    still rejects a specific binary, read the notarytool log and add/remove
+    keys here accordingly — these three cover the usual cases.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
