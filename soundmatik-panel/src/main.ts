@@ -169,20 +169,21 @@ async function ensureSidecar(): Promise<void> {
   if (await sidecarHealthy()) return;
 
   const candidates = await getSidecarCandidatePaths();
+  // Fire a launch attempt at every known location up front: nonexistent paths
+  // fail instantly and silently, the real one starts the helper (it launches
+  // invisibly — no console window; requires the manifest's launchProcess
+  // permission). If two copies start, the port guard makes the loser exit.
   for (const exePath of candidates) {
     try {
-      // Launches the helper invisibly (it has no console window). Requires the
-      // manifest's launchProcess permission. Nonexistent paths just fail here
-      // and we move on to the next candidate.
       await uxp.shell.openPath(exePath);
     } catch {
-      /* try next candidate after the poll below */
+      /* nonexistent candidate — ignore */
     }
-    const deadline = Date.now() + 6_000;
-    while (Date.now() < deadline) {
-      await sleep(500);
-      if (await sidecarHealthy(1000)) return;
-    }
+  }
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    await sleep(500);
+    if (await sidecarHealthy(1000)) return;
   }
 
   throw new Error(

@@ -71,11 +71,12 @@ npm run build                  # → dist\index.js   (npm run watch for auto-reb
 3. **Add Plugin** → select `G:\SOUNDMATIK\soundmatik-panel\manifest.json`.
 4. In the plugin row: **⋯ → Load** (or **Load & Watch** while developing —
    pair it with `npm run watch`).
-5. In Premiere: **Window → Extensions (UXP) → soundMatik** if it isn't already visible.
+5. In Premiere: **Window → UXP Plugins → soundMatik** if it isn't already visible.
 
-For a permanent install on your own machines, UDT's **⋯ → Package** produces a
-`.ccx` you can double-click to install via Creative Cloud. (Skip signing /
-marketplace — not needed for personal use.)
+Note: UDT-loaded plugins disappear when Premiere restarts — that's expected dev
+behavior. For a **permanent** install use the share package's `INSTALL.bat`
+(see Distribution below); don't keep both a UDT-loaded and an installed copy
+active at the same time (same plugin id).
 
 ## Using it
 
@@ -141,16 +142,19 @@ Silicon only.
 
 Personal tool, shared with friends via a GitHub Release:
 
-- **Windows:** `scripts/make-share-package.ps1` → `dist-share/soundMatik-kurulum.zip`
-  (unsigned — friends click through SmartScreen's *More info → Run anyway* once,
-  and may need to allow `yt-dlp.exe` past an antivirus false-positive).
+- **Windows:** `scripts/make-share-package.ps1` → `dist-share/soundMatik-windows.zip`.
+  `INSTALL.bat` copies the panel into `%APPDATA%\Adobe\UXP\Plugins\External\`
+  (Premiere scans that folder automatically — no Creative Cloud involved) and the
+  helper into `%LOCALAPPDATA%\soundMatik`. Unsigned — friends click through
+  SmartScreen's *More info → Run anyway* once, and may need to allow `yt-dlp.exe`
+  past an antivirus false-positive. `UNINSTALL.bat` removes both.
 - **macOS:** `scripts/make-mac-package.sh` → `dist-share/soundMatik-mac.zip`
   (signed + notarized — no warnings; friends just double-click `Install soundMatik.app`).
 
-The `.ccx` panel is JS/HTML only (no native code, no notarization needed). Whether
-Creative Cloud accepts a self-distributed unsigned `.ccx` via double-click is worth
-testing on your own machine first; the guaranteed fallback is installing the panel
-through the UXP Developer Tool, same as the dev flow above.
+Publishing an update: bump `version` in `soundmatik-panel/manifest.json` **and**
+`VERSION` in `soundmatik-panel/src/main.ts`, rebuild the packages, create a new
+GitHub release tagged `vX.Y.Z`. The panel's footer **Check for updates** link
+compares against the latest release tag and points users at the download page.
 
 > The Windows release bundles a GPL ffmpeg build (yt-dlp/FFmpeg-Builds). Its source
 > is at <https://github.com/yt-dlp/FFmpeg-Builds> / <https://ffmpeg.org>.
