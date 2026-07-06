@@ -1,7 +1,7 @@
 {
   "id": "com.soundmatik.panel",
   "name": "soundMatik",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.html",
   "manifestVersion": 5,
   "host": {
@@ -13,18 +13,37 @@
       "domains": "all"
     },
     "launchProcess": {
-      "schemes": ["http", "https"],
-      "extensions": [".exe", ".app", ""]
+      "schemes": [
+        "http",
+        "https"
+      ],
+      "extensions": [
+        ".exe",
+        ".app",
+        ""
+      ]
     }
   },
   "entrypoints": [
     {
       "type": "panel",
       "id": "soundmatik",
-      "minimumSize": { "width": 260, "height": 320 },
-      "maximumSize": { "width": 2000, "height": 2000 },
-      "preferredDockedSize": { "width": 340, "height": 460 },
-      "preferredFloatingSize": { "width": 360, "height": 480 },
+      "minimumSize": {
+        "width": 260,
+        "height": 320
+      },
+      "maximumSize": {
+        "width": 2000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 340,
+        "height": 460
+      },
+      "preferredFloatingSize": {
+        "width": 360,
+        "height": 480
+      },
       "label": {
         "default": "soundMatik"
       },
@@ -33,8 +52,17 @@
           "width": 23,
           "height": 23,
           "path": "icons/icon.png",
-          "scale": [1, 2],
-          "theme": ["darkest", "dark", "medium", "lightest", "light"]
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "darkest",
+            "dark",
+            "medium",
+            "lightest",
+            "light"
+          ]
         }
       ]
     }
@@ -44,9 +72,21 @@
       "width": 48,
       "height": 48,
       "path": "icons/plugin-icon.png",
-      "scale": [1, 2],
-      "theme": ["darkest", "dark", "medium", "lightest", "light", "all"],
-      "species": ["pluginList"]
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "darkest",
+        "dark",
+        "medium",
+        "lightest",
+        "light",
+        "all"
+      ],
+      "species": [
+        "pluginList"
+      ]
     }
   ]
 }
