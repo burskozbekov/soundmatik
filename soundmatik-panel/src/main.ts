@@ -14,7 +14,7 @@ declare const process: any;
 const ppro = require("premierepro") as premierepro;
 const uxp = require("uxp");
 
-const VERSION = "1.1.0"; // keep in sync with manifest.json
+const VERSION = "1.1.1"; // keep in sync with manifest.json
 const RELEASES_API =
   "https://api.github.com/repos/burskozbekov/soundmatik/releases/latest";
 const RELEASES_PAGE = "https://github.com/burskozbekov/soundmatik/releases/latest";
@@ -22,9 +22,11 @@ const RELEASES_PAGE = "https://github.com/burskozbekov/soundmatik/releases/lates
 const SIDECAR_BASE = "http://127.0.0.1:41320";
 const BIN_NAME = "SOUND_EFFECTS";
 const POLL_INTERVAL_MS = 1000;
-// Must be >= the sidecar's own 60-minute yt-dlp limit, or the panel gives up
-// while the helper is still working and the file later appears unimported.
-const MAX_JOB_MINUTES = 60;
+// Strictly GREATER than the sidecar's 60-minute yt-dlp limit (our poll clock
+// starts a touch earlier and the helper's final file-move runs outside its
+// timeout), so we don't give up while the helper is still finishing and leave
+// the file unimported. pollUntilDone also does a final status check on timeout.
+const MAX_JOB_MINUTES = 65;
 const FORMAT_STORAGE_KEY = "soundmatik.format";
 
 type AudioFormat = "wav" | "mp3";
@@ -495,6 +497,19 @@ async function pollUntilDone(jobId: string): Promise<JobStatusResponse> {
         return status;
     }
   }
+  // Deadline hit. The helper's own timeout starts slightly later than ours and
+  // its final file-move runs outside it, so the job may have just finished —
+  // do one last status check before giving up, or we'd strand a downloaded
+  // file in SOUND_EFFECTS without importing it.
+  try {
+    const res = await fetchWithTimeout(`${SIDECAR_BASE}/status/${jobId}`, undefined, 5000);
+    if (res.ok) {
+      const status = (await res.json()) as JobStatusResponse;
+      if (status.state === "done" || status.state === "error") return status;
+    }
+  } catch {
+    /* fall through to the give-up error */
+  }
   throw new Error(`Gave up after ${MAX_JOB_MINUTES} minutes — the download never finished.`);
 }
 
@@ -530,10 +545,31 @@ async function onDownloadClicked(): Promise<void> {
       throw new Error(finalStatus.error || "Download failed for an unknown reason.");
     }
 
-    // 4. Import into the SOUND_EFFECTS bin.
+    // 4. The download can take a while — make sure the SAME project is still
+    //    active before importing, or we'd import into the wrong project (or let
+    //    a raw native error reach the user). If it changed, the file is safe on
+    //    disk; tell the user where it is.
+    let active: Project | null = null;
+    try {
+      active = await ppro.Project.getActiveProject();
+    } catch {
+      /* treated as no active project */
+    }
+    if (!active || active.path !== project.path) {
+      setStatus(
+        "done",
+        "Saved",
+        `"${finalStatus.fileName}" was saved to the ${BIN_NAME} folder next to your project. The active project changed during the download, so drag it in from there.`
+      );
+      urlInput.value = "";
+      lastInputLen = 0;
+      return;
+    }
+
+    // 5. Import into the SOUND_EFFECTS bin.
     setStatus("busy", "Importing", `Adding "${finalStatus.fileName}" to the ${BIN_NAME} bin…`);
     await importIntoBin(
-      project,
+      active,
       finalStatus.filePath,
       finalStatus.fileName || "the audio file"
     );
@@ -551,6 +587,10 @@ async function onDownloadClicked(): Promise<void> {
   } finally {
     setBusy(false);
     hideProgress();
+    // Keep the paste-detection tracker in sync with the field after every run
+    // (0 on the success/clear path, the leftover URL's length after an error) so
+    // the next paste is still detected as a big length jump.
+    lastInputLen = urlInput.value.length;
   }
 }
 

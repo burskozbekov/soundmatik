@@ -36,6 +36,17 @@ NOTARY_PROFILE="${SM_NOTARY_PROFILE:-soundmatik-notary}"
 log() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
 die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 
+# Submit a file to Apple's notary service. Uses inline Apple-ID credentials when
+# SM_APPLE_ID + SM_TEAM_ID + SM_APP_PW are all set (handy if the stored keychain
+# profile is unavailable), otherwise the stored --keychain-profile.
+nsubmit() {
+  if [ -n "${SM_APPLE_ID:-}" ] && [ -n "${SM_TEAM_ID:-}" ] && [ -n "${SM_APP_PW:-}" ]; then
+    xcrun notarytool submit "$1" --apple-id "$SM_APPLE_ID" --team-id "$SM_TEAM_ID" --password "$SM_APP_PW" --wait
+  else
+    xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+  fi
+}
+
 # ── Resolve signing identity ───────────────────────────────────────────────
 if [ -z "${SM_SIGN_ID:-}" ]; then
   SM_SIGN_ID="$(security find-identity -v -p codesigning \
@@ -93,7 +104,7 @@ codesign --verify --deep --strict --verbose=2 "$APP" || die "codesign verify fai
 log "Notarizing (uploading to Apple, this can take a few minutes)..."
 ZIP="$OUT/_notarize.zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
-if ! xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait; then
+if ! nsubmit "$ZIP"; then
   echo "Notarization failed. Get the detailed log with:"
   echo "  xcrun notarytool history --keychain-profile \"$NOTARY_PROFILE\""
   echo "  xcrun notarytool log <submission-id> --keychain-profile \"$NOTARY_PROFILE\""
@@ -164,11 +175,20 @@ on run
 			return
 		end if
 
-		do shell script "mkdir -p " & quoted form of destRoot
-		do shell script "pkill -f soundmatik-sidecar 2>/dev/null; true"
-		do shell script "rm -rf " & quoted form of (destRoot & "soundMatik Helper.app")
-		do shell script "cp -R " & quoted form of (src & "soundMatik Helper.app") & " " & quoted form of destRoot
-		do shell script "xattr -dr com.apple.quarantine " & quoted form of (destRoot & "soundMatik Helper.app") & " 2>/dev/null; true"
+		try
+			do shell script "mkdir -p " & quoted form of destRoot
+			do shell script "pkill -f soundmatik-sidecar 2>/dev/null; true"
+			-- Wait for the old helper to actually exit (and free port 41320)
+			-- before copy+relaunch, or the new one sees the port in use and
+			-- quits immediately, leaving nothing running.
+			do shell script "for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f soundmatik-sidecar >/dev/null 2>&1 || break; sleep 0.3; done"
+			do shell script "rm -rf " & quoted form of (destRoot & "soundMatik Helper.app")
+			do shell script "cp -R " & quoted form of (src & "soundMatik Helper.app") & " " & quoted form of destRoot
+			do shell script "xattr -dr com.apple.quarantine " & quoted form of (destRoot & "soundMatik Helper.app") & " 2>/dev/null; true"
+		on error
+			display dialog "soundMatik couldn't finish installing (copying the files failed). Please reopen the soundMatik disk image and run the installer again." buttons {"OK"} default button "OK" with title "soundMatik" with icon caution giving up after 600
+			return
+		end try
 		-- Pre-launch the helper now so macOS does its first-run verification
 		-- during install (while the user expects to wait), not on first download.
 		do shell script "open " & quoted form of (destRoot & "soundMatik Helper.app")
@@ -195,7 +215,7 @@ codesign --verify --deep --strict --verbose=2 "$INSTALLER" || die "installer cod
 log "Notarizing the installer applet (tiny — fast)..."
 ZIP="$OUT/_notarize-installer.zip"
 ditto -c -k --keepParent "$INSTALLER" "$ZIP"
-if ! xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait; then
+if ! nsubmit "$ZIP"; then
   echo "Installer notarization failed — see: xcrun notarytool history/log ..."
   die "notarytool rejected the installer"
 fi
@@ -232,6 +252,12 @@ Double-click "Install soundMatik.app".
   • Restart Premiere Pro, then: Window > Extensions (UXP) > soundMatik
 
 Everything is signed and notarized by Apple — no security warnings.
+
+To uninstall: quit Premiere Pro, then delete the folder
+  ~/Library/Application Support/soundMatik
+and remove the soundMatik panel from Adobe Creative Cloud
+(Creative Cloud app > Stock & Marketplace > Plugins > Manage plugins).
+
 by Sevki Bugra Ozbek · catheadai.com
 EOF
 
@@ -249,7 +275,7 @@ codesign --verify --verbose=2 "$DMG" || die "DMG codesign verify failed"
 
 # Notarize the DMG (notarytool takes a .dmg directly — no zip wrapper).
 log "Notarizing the DMG (uploading to Apple, a few minutes)..."
-if ! xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait; then
+if ! nsubmit "$DMG"; then
   echo "DMG notarization failed — see: xcrun notarytool history/log ..."
   die "notarytool rejected the DMG"
 fi

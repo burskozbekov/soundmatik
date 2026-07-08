@@ -123,11 +123,13 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
 ;--------------------------------------------------------------------------
 
 ; Stop a running helper so its .exe files aren't locked during copy/removal.
+; /T kills the ffmpeg/deno child tree too; then give the OS + any AV real-time
+; scan a moment to release the exe handles before we overwrite them.
 !macro KillHelper
   DetailPrint "Stopping ${HELPER_EXE} (if running)..."
   nsExec::Exec 'taskkill /IM ${HELPER_EXE} /F /T'
   Pop $0
-  Sleep 600
+  Sleep 1500
 !macroend
 
 ; Remove every previously-installed panel folder:
@@ -206,7 +208,10 @@ Section "soundMatik" SecMain
   Pop $0
   StrCmp $0 "0" reg_ok 0
     DetailPrint "WARNING: panel registration returned: $0"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "soundMatik was copied, but registering it with Premiere Pro failed (PowerShell returned: $0).$\r$\n$\r$\nThe panel may not appear under Window > Extensions (UXP). You can retry by running the installer again."
+    ; The most common cause is a corrupt existing premierepro.json (which the
+    ; ps1 refuses to overwrite). Point the user straight at the fix - just
+    ; "run the installer again" would hit the same corrupt file and loop.
+    MessageBox MB_OK|MB_ICONEXCLAMATION "soundMatik was copied, but registering it with Premiere Pro failed.$\r$\n$\r$\nThe panel may not appear under Window > Extensions (UXP). Most often this means Premiere's plugin list is corrupt. To fix it:$\r$\n$\r$\n1. Delete this file:$\r$\n   %APPDATA%\Adobe\UXP\PluginsInfo\v1\premierepro.json$\r$\n2. Run this installer again."
   reg_ok:
 
   ; 6) Write uninstaller + Add/Remove Programs (HKCU, per-user)

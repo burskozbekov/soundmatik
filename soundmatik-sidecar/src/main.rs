@@ -77,7 +77,11 @@ fn init_log(exe_dir: &Path) {
 fn log(msg: &str) {
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("[{stamp}] {msg}");
-    eprintln!("{line}");
+    // NOT eprintln! — the release Windows build is windows_subsystem="windows"
+    // (no console), so when the panel launches it the child inherits a NULL
+    // stderr handle. eprintln! PANICS on a failed stderr write, which would
+    // abort the helper before it serves. Ignore the write result instead.
+    let _ = writeln!(std::io::stderr(), "{line}");
     if let Some(Some(file)) = LOG_FILE.get().map(|f| f.as_ref()) {
         if let Ok(mut f) = file.lock() {
             let _ = writeln!(f, "{line}");
@@ -420,6 +424,11 @@ async fn run_ytdlp(
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flash, inherited by ffmpeg/deno children
+    // Put yt-dlp in its own process group so, on the hard timeout, we can kill
+    // the WHOLE tree (yt-dlp + its ffmpeg/deno children) — killing yt-dlp alone
+    // would orphan them (still transcoding, still holding the temp file).
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     log(&format!("job {job_id}: yt-dlp start, url={} format={}", req.url, req.format));
 
@@ -479,6 +488,20 @@ async fn run_ytdlp(
     let status = match tokio::time::timeout(Duration::from_secs(60 * 60), run).await {
         Ok(res) => res.map_err(|e| format!("yt-dlp process error: {e}"))?,
         Err(_elapsed) => {
+            // Kill the whole process tree, not just yt-dlp, so no ffmpeg/deno
+            // grandchild keeps transcoding or holding the temp dir open.
+            if let Some(pid) = child.id() {
+                #[cfg(unix)]
+                // Negative pid = the process group we created at spawn.
+                let _ = std::process::Command::new("/bin/kill")
+                    .arg("-KILL")
+                    .arg(format!("-{pid}"))
+                    .status();
+                #[cfg(windows)]
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &pid.to_string()])
+                    .status();
+            }
             let _ = child.kill().await;
             return Err(
                 "Download ran for over an hour and was cancelled — try a shorter video or check your connection."

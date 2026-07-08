@@ -93,8 +93,9 @@ once** (the audio is stored next to the `.prproj`; the panel tells you if not).
 ## Sidecar details
 
 - Health probe: `curl http://127.0.0.1:41320/health`
-- Log file: `soundmatik-sidecar\target\release\soundmatik-sidecar.log`
-  (next to wherever the exe runs from)
+- Log file (installed): macOS `~/Library/Logs/soundMatik/soundmatik-sidecar.log`;
+  Windows `%LOCALAPPDATA%\soundMatik\soundmatik-sidecar.log`. In a dev build the
+  log sits next to wherever the exe runs from.
 - Env overrides: `SOUNDMATIK_BIN_DIR` (binary folder), `SOUNDMATIK_IDLE_SECS`
   (idle-exit timeout, default 900)
 - The panel launches the exe at
