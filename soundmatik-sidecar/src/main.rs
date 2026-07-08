@@ -95,6 +95,10 @@ struct JobStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     progress: Option<f32>, // download percent 0..100 while downloading
     #[serde(skip_serializing_if = "Option::is_none")]
+    speed: Option<String>, // transfer rate, e.g. "5.2MiB/s"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<String>, // total size, e.g. "3.52MiB"
+    #[serde(skip_serializing_if = "Option::is_none")]
     file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_name: Option<String>,
@@ -239,7 +243,9 @@ fn sweep_stale_tmp_dirs(target: &Path) {
             .ok()
             .and_then(|t| SystemTime::now().duration_since(t).ok())
             .map(|age| age.as_secs() > STALE_TMP_MAX_AGE_SECS)
-            .unwrap_or(true);
+            // If we can't determine the age, KEEP it — never risk deleting a
+            // concurrent in-flight job's temp dir.
+            .unwrap_or(false);
         if age_ok {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -270,6 +276,8 @@ fn friendly_error(exit_note: &str, tail: &[String]) -> String {
         || lower.contains("connection")
     {
         "Network problem while downloading — check your internet connection and try again."
+    } else if lower.contains("no space left") || lower.contains("disk full") {
+        "The disk is full — free up space on the drive that holds your project, then try again."
     } else if lower.contains("ffmpeg") && lower.contains("not found") {
         "Bundled ffmpeg was not found — re-run the fetch-binaries script."
     } else {
@@ -298,8 +306,20 @@ struct DownloadReq {
     target_folder: String,
 }
 
+/// Decrements active_jobs on drop so a panic anywhere in run_job can't leak the
+/// count — a leaked count would keep active_jobs >= 1 forever, so the idle
+/// watchdog never fires, the process never exits, and it holds port 41320
+/// (relaunches then quietly exit and the panel silently can't work).
+struct ActiveJobGuard<'a>(&'a AtomicUsize);
+impl Drop for ActiveJobGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn run_job(state: Arc<AppState>, job_id: String, req: DownloadReq) {
     state.active_jobs.fetch_add(1, Ordering::SeqCst);
+    let _active = ActiveJobGuard(&state.active_jobs);
     let result = run_pipeline(&state, &job_id, &req).await;
     match result {
         Ok((path, name)) => {
@@ -309,6 +329,8 @@ async fn run_job(state: Arc<AppState>, job_id: String, req: DownloadReq) {
                 JobStatus {
                     state: "done".into(),
                     progress: Some(100.0),
+                    speed: None,
+                    total: None,
                     file_path: Some(path.to_string_lossy().to_string()),
                     file_name: Some(name),
                     error: None,
@@ -322,6 +344,8 @@ async fn run_job(state: Arc<AppState>, job_id: String, req: DownloadReq) {
                 JobStatus {
                     state: "error".into(),
                     progress: None,
+                    speed: None,
+                    total: None,
                     file_path: None,
                     file_name: None,
                     error: Some(msg),
@@ -329,8 +353,8 @@ async fn run_job(state: Arc<AppState>, job_id: String, req: DownloadReq) {
             );
         }
     }
-    state.active_jobs.fetch_sub(1, Ordering::SeqCst);
     state.touch();
+    // _active (ActiveJobGuard) drops here, decrementing active_jobs even on panic.
 }
 
 async fn run_pipeline(
@@ -432,16 +456,21 @@ async fn run_ytdlp(
             stdout_tail.push(line.clone());
 
             if line.starts_with("[download]") {
-                if let Some(pct) = parse_download_percent(&line) {
+                let rest = line["[download]".len()..].trim_start();
+                if let Some((pct, size, rate)) = parse_download_progress(rest) {
                     state.update_job(job_id, |j| {
                         j.state = "downloading".into();
                         j.progress = Some(pct);
+                        j.speed = rate.clone();
+                        j.total = size.clone();
                     });
                 }
             } else if line.starts_with("[ExtractAudio]") || line.starts_with("[Fixup") {
                 state.update_job(job_id, |j| {
                     j.state = "converting".into();
                     j.progress = None;
+                    j.speed = None;
+                    j.total = None;
                 });
             }
         }
@@ -471,16 +500,54 @@ async fn run_ytdlp(
         if j.state == "downloading" {
             j.state = "converting".into();
             j.progress = None;
+            j.speed = None;
+            j.total = None;
         }
     });
     Ok(())
 }
 
-fn parse_download_percent(line: &str) -> Option<f32> {
-    // e.g. "[download]  42.7% of    3.52MiB at  1.21MiB/s ETA 00:02"
-    let after = line.strip_prefix("[download]")?.trim_start();
-    let pct_str = after.split('%').next()?.trim();
-    pct_str.parse::<f32>().ok().filter(|p| (0.0..=100.0).contains(p))
+/// Parse the tail of a "[download] ..." progress line (prefix already removed),
+/// e.g. " 42.7% of    3.52MiB at    1.21MiB/s ETA 00:02"
+///   or "100% of 3.52MiB in 00:00:02 at 1.5MiB/s".
+/// Returns (percent, total size like "3.52MiB", transfer rate like "1.21MiB/s").
+fn parse_download_progress(rest: &str) -> Option<(f32, Option<String>, Option<String>)> {
+    let pct_str = rest.split('%').next()?.trim();
+    let pct = pct_str.parse::<f32>().ok().filter(|p| (0.0..=100.0).contains(p))?;
+
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let mut size: Option<String> = None;
+    let mut rate: Option<String> = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "of" if size.is_none() => {
+                if let Some(next) = tokens.get(i + 1) {
+                    if *next == "~" {
+                        if let Some(n2) = tokens.get(i + 2) {
+                            size = Some(format!("~{n2}"));
+                            i += 2;
+                        }
+                    } else {
+                        size = Some(next.trim_start_matches('~').to_string());
+                        i += 1;
+                    }
+                }
+            }
+            "at" if rate.is_none() => {
+                if let Some(next) = tokens.get(i + 1) {
+                    if next.ends_with("/s") {
+                        rate = Some(next.to_string());
+                        i += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    Some((pct, size, rate))
 }
 
 /// Move the produced audio file from the temp dir into the target folder,
@@ -514,51 +581,49 @@ fn finalize_output(tmp_dir: &Path, target: &Path, format: &str) -> Result<(PathB
         .map(|x| x.to_string_lossy().to_lowercase())
         .unwrap_or_else(|| format.to_string());
 
-    // Two same-titled jobs can finish at once: rename fails if the freshly
-    // recomputed unique name got taken in between, so retry with a new name
-    // rather than ever overwriting anything.
+    // Never overwrite. Two same-titled jobs can finish at once, and
+    // std::fs::rename REPLACES an existing destination on both Unix and
+    // Windows — so we can't just rename onto a name unique_target_path picked
+    // (a concurrent job may have grabbed the same name in the TOCTOU window).
+    // Instead claim the name atomically with create_new (only one job can win
+    // that), then move the produced file onto the placeholder we own.
     let mut last_err: Option<std::io::Error> = None;
-    for _ in 0..25 {
+    for _ in 0..1000 {
         let dest = unique_target_path(target, &stem, &ext);
-        match std::fs::rename(&produced_path, &dest) {
-            Ok(()) => {
-                let name = file_name_of(&dest, &stem, &ext);
-                return Ok((dest, name));
-            }
-            Err(e) => {
-                if dest.exists() {
-                    // lost the name race — loop recomputes a free name
-                    continue;
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(_) => {
+                // We own `dest`. Move the produced file onto it (fast rename on
+                // the same filesystem, else copy across mounts). Both replace
+                // our empty placeholder — safe, since no other job can hold it.
+                if std::fs::rename(&produced_path, &dest).is_ok() {
+                    return Ok((dest.clone(), file_name_of(&dest, &stem, &ext)));
                 }
+                match std::fs::copy(&produced_path, &dest) {
+                    Ok(_) => {
+                        let _ = std::fs::remove_file(&produced_path);
+                        return Ok((dest.clone(), file_name_of(&dest, &stem, &ext)));
+                    }
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&dest); // drop the placeholder
+                        return Err(format!(
+                            "Could not move file into {}: {e}",
+                            target.display()
+                        ));
+                    }
+                }
+            }
+            // Name taken between check and create — recompute a fresh one.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
                 last_err = Some(e);
                 break;
             }
         }
     }
-
-    // Fallback for setups where rename fails outright (e.g. cross-mount):
-    // copy with create_new so a race still can't clobber an existing file.
-    for _ in 0..25 {
-        let dest = unique_target_path(target, &stem, &ext);
-        match copy_no_overwrite(&produced_path, &dest) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&produced_path);
-                let name = file_name_of(&dest, &stem, &ext);
-                return Ok((dest, name));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(format!(
-                    "Could not move file into {}: {e} (earlier rename error: {:?})",
-                    target.display(),
-                    last_err
-                ))
-            }
-        }
-    }
     Err(format!(
-        "Could not find a free filename for \"{stem}.{ext}\" in {}",
-        target.display()
+        "Could not find a free filename for \"{stem}.{ext}\" in {} ({:?})",
+        target.display(),
+        last_err
     ))
 }
 
@@ -566,16 +631,6 @@ fn file_name_of(dest: &Path, stem: &str, ext: &str) -> String {
     dest.file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| format!("{stem}.{ext}"))
-}
-
-fn copy_no_overwrite(src: &Path, dest: &Path) -> std::io::Result<()> {
-    let mut out = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dest)?;
-    let mut inp = std::fs::File::open(src)?;
-    std::io::copy(&mut inp, &mut out)?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -599,8 +654,27 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
 
 async fn post_download(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<DownloadReq>,
 ) -> (StatusCode, Json<Value>) {
+    // DNS-rebinding defense: only accept requests whose Host is loopback. The
+    // server binds 127.0.0.1, but a malicious web page can rebind its own
+    // hostname to 127.0.0.1 to reach us same-origin — it would still send its
+    // own Host header (e.g. "evil.example"), not a loopback one. /download is
+    // the only state-changing endpoint (it spawns yt-dlp and writes files), so
+    // it's the one worth guarding.
+    let host_ok = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(|h| {
+            let bare = h.trim().split(':').next().unwrap_or("");
+            bare == "127.0.0.1" || bare == "localhost"
+        })
+        .unwrap_or(false);
+    if !host_ok {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "Forbidden." })));
+    }
+
     state.touch();
 
     let url = req.url.trim().to_string();
@@ -636,6 +710,8 @@ async fn post_download(
         JobStatus {
             state: "downloading".into(),
             progress: None,
+            speed: None,
+            total: None,
             file_path: None,
             file_name: None,
             error: None,

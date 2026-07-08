@@ -74,9 +74,10 @@ npm run build                  # → dist\index.js   (npm run watch for auto-reb
 5. In Premiere: **Window → UXP Plugins → soundMatik** if it isn't already visible.
 
 Note: UDT-loaded plugins disappear when Premiere restarts — that's expected dev
-behavior. For a **permanent** install use the share package's `INSTALL.bat`
-(see Distribution below); don't keep both a UDT-loaded and an installed copy
-active at the same time (same plugin id).
+behavior. For a **permanent** install use the release installer
+(`soundMatik-mac.dmg` / `soundMatik-Setup.exe`, see Distribution below); don't
+keep both a UDT-loaded and an installed copy active at the same time (same
+plugin id).
 
 ## Using it
 
@@ -104,12 +105,11 @@ once** (the audio is stored next to the `.prproj`; the panel tells you if not).
 
 ## macOS build (signed + notarized)
 
-Everything is cross-platform by construction. Because macOS Gatekeeper blocks
-unsigned binaries, the Mac helper ships as a **signed, notarized `.app` bundle**
-(`soundMatik Helper.app`), wrapped in a **signed, notarized installer applet**
-(`Install soundMatik.app`) — no security warnings at any step. This needs an
-Apple Developer account and must run **on a Mac**. The macOS package is
-**Apple Silicon only** (M1+); Intel Macs are not supported.
+Everything is cross-platform by construction. The Mac build ships as one
+**signed + notarized + stapled `soundMatik-mac.dmg`** — the user opens it and
+double-clicks `Install soundMatik.app` inside; no security warnings at any step.
+This needs an Apple Developer account and must run **on a Mac**. The macOS
+package is **Apple Silicon only** (M1+); Intel Macs are not supported.
 
 ```bash
 # one-time: rustup, xcode-select --install, node, a Developer ID Application cert,
@@ -122,11 +122,21 @@ export SM_NOTARY_PROFILE="soundmatik-notary"
 The script fetches the mac binaries, builds the sidecar, assembles the helper `.app`
 (sidecar in `Contents/MacOS/`, yt-dlp/ffmpeg/deno in `Contents/Resources/bin/mac/`),
 codesigns everything with Hardened Runtime + `soundmatik-sidecar/mac/entitlements.plist`,
-notarizes via `notarytool` and staples. It then builds `Install soundMatik.app` (an
-AppleScript applet with the helper `.app` and the `.ccx` embedded), signs + notarizes
-that too, and produces `dist-share/soundMatik-mac.zip` (two notarization submissions
-total: helper, then installer). The installer copies the helper into
-`~/Library/Application Support/soundMatik/`, pre-launches it, and opens the `.ccx`.
+notarizes via `notarytool` and staples. It then builds a **tiny** `Install soundMatik.app`
+AppleScript applet and packages it into a DMG whose volume also carries a hidden
+`.payload/` (the notarized helper `.app` + the `.ccx`). Finally it signs the DMG
+(Developer ID Application + `--timestamp` only — a disk image is data, not code),
+notarizes the DMG directly, and staples it (three notarization submissions total:
+helper, applet, DMG). At install time the applet copies the helper out of `.payload`
+into `~/Library/Application Support/soundMatik/`, pre-launches it, and opens the `.ccx`.
+
+> Why a tiny applet + a hidden `.payload` instead of embedding the helper in the
+> applet: a quarantined app run from a downloaded DMG is **App-Translocated**
+> (copied to a random read-only mount and re-verified), and a ~130 MB embedded
+> payload stalls Gatekeeper for minutes at `_dyld_start` on first launch. A
+> few-KB applet launches instantly and copies the payload from the DMG volume.
+> (A notarizable `.pkg` would need a *Developer ID Installer* cert we don't have;
+> a signed DMG only needs the *Developer ID Application* cert, which we do.)
 
 The bundled runtimes need JIT/unsigned-memory entitlements (deno's V8, yt-dlp's
 embedded Python). If notarization rejects a specific binary, read the notary log
@@ -140,21 +150,34 @@ Silicon only.
 
 ## Distribution (GitHub Releases)
 
-Personal tool, shared with friends via a GitHub Release:
+Personal tool, shared with friends via a GitHub Release. **One double-click file
+per platform** — no zip to unpack, no `INSTALL.bat` to hunt for:
 
-- **Windows:** `scripts/make-share-package.ps1` → `dist-share/soundMatik-windows.zip`.
-  `INSTALL.bat` copies the panel into `%APPDATA%\Adobe\UXP\Plugins\External\`
-  (Premiere scans that folder automatically — no Creative Cloud involved) and the
-  helper into `%LOCALAPPDATA%\soundMatik`. Unsigned — friends click through
-  SmartScreen's *More info → Run anyway* once, and may need to allow `yt-dlp.exe`
-  past an antivirus false-positive. `UNINSTALL.bat` removes both.
-- **macOS:** `scripts/make-mac-package.sh` → `dist-share/soundMatik-mac.zip`
-  (signed + notarized — no warnings; friends just double-click `Install soundMatik.app`).
+- **Windows:** `scripts/build-windows-installer.sh` (macOS/Linux) or
+  `scripts/make-share-package.ps1` (Windows) → `dist-share/soundMatik-Setup.exe`,
+  a per-user NSIS installer (no admin). It installs the helper to
+  `%LOCALAPPDATA%\soundMatik`, the panel to a versioned
+  `%APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel_<version>`, and
+  **registers it in `%APPDATA%\Adobe\UXP\PluginsInfo\v1\premierepro.json`** (which
+  is what Premiere actually reads — copying files under `Plugins\External` alone
+  is not enough) via the bundled `register-panel.ps1`. Writes an HKCU
+  Add/Remove-Programs uninstaller. Unsigned — friends click through SmartScreen's
+  *More info → Run anyway* once, and may need to allow `yt-dlp.exe` past an
+  antivirus false-positive.
+- **macOS:** `scripts/make-mac-package.sh` → `dist-share/soundMatik-mac.dmg`
+  (signed + notarized — no warnings; open it and double-click `Install soundMatik.app`).
 
-Publishing an update: bump `version` in `soundmatik-panel/manifest.json` **and**
-`VERSION` in `soundmatik-panel/src/main.ts`, rebuild the packages, create a new
-GitHub release tagged `vX.Y.Z`. The panel's footer **Check for updates** link
-compares against the latest release tag and points users at the download page.
+The release assets are always named exactly `soundMatik-mac.dmg` and
+`soundMatik-Setup.exe`, so
+`…/releases/latest/download/soundMatik-mac.dmg` (and `-Setup.exe`) are permanent
+links that never change across versions.
+
+Publishing an update: bump the version in `soundmatik-panel/manifest.json`,
+`soundmatik-panel/package.json`, `soundmatik-panel/src/main.ts` (`VERSION`),
+`soundmatik-sidecar/Cargo.toml`, and `soundmatik-sidecar/mac/Info.plist` together,
+rebuild both installers, and create a new GitHub release tagged `vX.Y.Z`. The
+panel's footer **Check for updates** control compares against the latest release
+tag and points users at the download page.
 
 > The Windows release bundles a GPL ffmpeg build (yt-dlp/FFmpeg-Builds). Its source
 > is at <https://github.com/yt-dlp/FFmpeg-Builds> / <https://ffmpeg.org>.

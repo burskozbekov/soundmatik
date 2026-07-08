@@ -14,7 +14,7 @@ declare const process: any;
 const ppro = require("premierepro") as premierepro;
 const uxp = require("uxp");
 
-const VERSION = "1.0.1"; // keep in sync with manifest.json
+const VERSION = "1.1.0"; // keep in sync with manifest.json
 const RELEASES_API =
   "https://api.github.com/repos/burskozbekov/soundmatik/releases/latest";
 const RELEASES_PAGE = "https://github.com/burskozbekov/soundmatik/releases/latest";
@@ -41,9 +41,15 @@ const mp3Btn = $<HTMLElement>("fmt-mp3");
 const formatHint = $<HTMLElement>("fmt-hint");
 const downloadBtn = $<HTMLElement>("download");
 const statusBox = $<HTMLElement>("status");
+const progressBox = $<HTMLElement>("progress");
+const progressFill = $<HTMLElement>("progress-fill");
+const progressPct = $<HTMLElement>("progress-pct");
+const progressSpeed = $<HTMLElement>("progress-speed");
 
 let format: AudioFormat = loadSavedFormat();
 let running = false;
+// Tracks the input length so a paste (big jump) can be told apart from typing.
+let lastInputLen = 0;
 
 function setStatus(ui: UiState, state: string, message: string) {
   statusBox.className = ui;
@@ -83,6 +89,37 @@ function setBusy(busy: boolean) {
   urlInput.disabled = busy;
   wavBtn.classList.toggle("disabled", busy);
   mp3Btn.classList.toggle("disabled", busy);
+}
+
+// ---------------------------------------------------------------------------
+// Download progress bar
+
+function hideProgress() {
+  progressBox.classList.add("hidden");
+  progressFill.classList.remove("indeterminate");
+  progressFill.style.width = "0%";
+  progressPct.textContent = "0%";
+  progressSpeed.textContent = "";
+}
+
+/// Known percentage: fill the bar and show percent + transfer speed.
+function showProgress(pct: number, speed?: string) {
+  progressBox.classList.remove("hidden");
+  progressFill.classList.remove("indeterminate");
+  const clamped = Math.max(0, Math.min(100, pct));
+  progressFill.style.width = `${clamped}%`;
+  progressPct.textContent = `${clamped.toFixed(0)}%`;
+  progressSpeed.textContent = speed ? speed : "";
+}
+
+/// Unknown percentage (download just started, or converting): show a moving
+/// stripe and a label instead of a stuck 0%.
+function showProgressBusy(label: string) {
+  progressBox.classList.remove("hidden");
+  progressFill.style.width = "";
+  progressFill.classList.add("indeterminate");
+  progressPct.textContent = label;
+  progressSpeed.textContent = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +255,7 @@ async function ensureSidecar(): Promise<void> {
 
   const candidates = await getSidecarCandidatePaths();
   const launchErrors: string[] = [];
+  let sawConsentDialog = false;
   for (const exePath of candidates) {
     // Launches the helper invisibly (it has no console window). Requires the
     // manifest's launchProcess permission. Per UXP docs openPath does NOT
@@ -240,6 +278,7 @@ async function ensureSidecar(): Promise<void> {
     let waitMs: number;
     if (outcome === CONSENT_PENDING) {
       // Most likely Premiere is showing its launch-permission dialog.
+      sawConsentDialog = true;
       setStatus(
         "busy",
         "Starting",
@@ -276,13 +315,16 @@ async function ensureSidecar(): Promise<void> {
     }
   }
 
-  if (candidates.length > 0 && launchErrors.length === candidates.length) {
+  // Only claim Premiere "blocked" it if a permission dialog actually appeared;
+  // if every candidate path was simply missing (helper not installed), tell the
+  // user to install instead — a "click Allow" message would never come true.
+  if (sawConsentDialog) {
     throw new Error(
       "Premiere blocked soundMatik from starting its helper app. Click DOWNLOAD AUDIO again and choose Allow when Premiere asks for permission."
     );
   }
   throw new Error(
-    "The soundMatik helper couldn't be started. Please run the soundMatik installer once more, then try again."
+    "The soundMatik helper isn't installed (or couldn't be started). Please run the soundMatik installer once, then try again."
   );
 }
 
@@ -377,6 +419,8 @@ async function importIntoBin(
 interface JobStatusResponse {
   state: "downloading" | "converting" | "done" | "error";
   progress?: number;
+  speed?: string;
+  total?: string;
   filePath?: string;
   fileName?: string;
   error?: string;
@@ -428,14 +472,22 @@ async function pollUntilDone(jobId: string): Promise<JobStatusResponse> {
 
     switch (status.state) {
       case "downloading": {
-        const pct =
-          typeof status.progress === "number" && status.progress > 0
-            ? ` ${status.progress.toFixed(0)}%`
-            : "…";
-        setStatus("busy", "Downloading", `Grabbing audio${pct}`);
+        const known =
+          typeof status.progress === "number" && status.progress > 0;
+        if (known) {
+          const pct = status.progress as number;
+          showProgress(pct, status.speed);
+          const size = status.total ? ` of ${status.total}` : "";
+          const spd = status.speed ? ` · ${status.speed}` : "";
+          setStatus("busy", "Downloading", `Grabbing audio ${pct.toFixed(0)}%${size}${spd}`);
+        } else {
+          showProgressBusy("Starting…");
+          setStatus("busy", "Downloading", "Grabbing audio…");
+        }
         break;
       }
       case "converting":
+        showProgressBusy("Converting…");
         setStatus("busy", "Converting", `Extracting ${format.toUpperCase()} audio…`);
         break;
       case "done":
@@ -460,6 +512,7 @@ async function onDownloadClicked(): Promise<void> {
   }
 
   setBusy(true);
+  hideProgress();
   try {
     // 1. Where does the audio go? (fails fast if the project isn't saved)
     const { project, targetFolder } = await getProjectTarget();
@@ -491,11 +544,13 @@ async function onDownloadClicked(): Promise<void> {
       `"${finalStatus.fileName}" is in the ${BIN_NAME} bin — drag it onto your timeline.`
     );
     urlInput.value = "";
+    lastInputLen = 0; // field cleared programmatically — don't treat next type as a paste
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     setStatus("error", "Error", message);
   } finally {
     setBusy(false);
+    hideProgress();
   }
 }
 
@@ -514,6 +569,46 @@ downloadBtn.addEventListener("click", () => {
 urlInput.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Enter") void onDownloadClicked();
 });
+
+/// Auto-start when a link lands in the input. Reads the field on the next tick
+/// so pasted text has been applied. The running-guard in onDownloadClicked
+/// makes firing this more than once per paste harmless.
+function autoStartIfUrl() {
+  setTimeout(() => {
+    if (running) return;
+    const url = urlInput.value.trim();
+    if (/^https?:\/\//i.test(url)) {
+      void onDownloadClicked();
+    }
+  }, 0);
+}
+
+// Paste = go. UXP is inconsistent about which of these it delivers, so we
+// listen to all of them and let the running-guard de-dupe:
+//   1. the "paste" event (when the host fires it),
+//   2. the "input" event with an insertFromPaste/Drop inputType,
+//   3. any "input" where the value suddenly jumps by many characters (a paste
+//      or drag-drop looks like a big jump; typing adds one char at a time) and
+//      now looks like a full URL — the catch-all when inputType is absent,
+//   4. Cmd/Ctrl+V keydown as a last resort.
+urlInput.addEventListener("paste", () => autoStartIfUrl());
+urlInput.addEventListener("input", (e: Event) => {
+  const value = urlInput.value;
+  const jumped = value.length - lastInputLen >= 8;
+  lastInputLen = value.length;
+  const inputType = (e as InputEvent).inputType;
+  const pasteLike =
+    inputType === "insertFromPaste" || inputType === "insertFromDrop";
+  if (pasteLike || (jumped && /^https?:\/\//i.test(value.trim()))) {
+    autoStartIfUrl();
+  }
+});
+urlInput.addEventListener("keydown", (e: KeyboardEvent) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === "v" || e.key === "V")) {
+    autoStartIfUrl();
+  }
+});
+
 $<HTMLElement>("site-link").addEventListener("click", () => {
   try {
     uxp.shell.openExternal("https://catheadai.com");
@@ -550,7 +645,19 @@ async function checkForUpdates(): Promise<void> {
   }
   updateLink.textContent = "Checking…";
   try {
-    const res = await fetchWithTimeout(RELEASES_API, undefined, 8000);
+    // GitHub's REST API rejects requests with no User-Agent (HTTP 403), which
+    // would make every update check silently fall through to "open releases
+    // page" and never actually compare versions. Send a UA + Accept header.
+    const res = await fetchWithTimeout(
+      RELEASES_API,
+      {
+        headers: {
+          "User-Agent": "soundMatik-panel",
+          Accept: "application/vnd.github+json",
+        },
+      },
+      8000
+    );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = await res.json();
     // tag like "v1.2.0" (possibly with a suffix) -> "1.2.0"
