@@ -160,6 +160,36 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
   rpf_done_${UID}:
 !macroend
 
+; Clear the per-plugin UXP storage caches for every Premiere version
+; (PluginsStorage\PPRO\<ver>\{External,Developer}\<id>). A stale storage
+; entry left by an older install (or a UXP Developer Tool session) can
+; reference a now-deleted panel path and keep the freshly registered panel
+; from ever appearing in Window > Extensions (UXP). Deleting it is safe -
+; the host recreates it on the next successful load.
+!macro RemoveStorageFolders UID
+  DetailPrint "Clearing stale UXP plugin storage..."
+  StrCpy $R3 "$APPDATA\Adobe\UXP\PluginsStorage\PPRO"
+  Push "___rsf_end_${UID}___"
+  FindFirst $R4 $R5 "$R3\*"
+  rsf_collect_${UID}:
+    StrCmp $R5 "" rsf_collected_${UID}
+    StrCmp $R5 "." rsf_next_${UID}
+    StrCmp $R5 ".." rsf_next_${UID}
+    Push "$R5"
+  rsf_next_${UID}:
+    FindNext $R4 $R5
+    Goto rsf_collect_${UID}
+  rsf_collected_${UID}:
+  FindClose $R4
+  rsf_del_${UID}:
+    Pop $R5
+    StrCmp $R5 "___rsf_end_${UID}___" rsf_done_${UID}
+    RMDir /r "$R3\$R5\External\${PANEL_ID}"
+    RMDir /r "$R3\$R5\Developer\${PANEL_ID}"
+    Goto rsf_del_${UID}
+  rsf_done_${UID}:
+!macroend
+
 ;--------------------------------------------------------------------------
 ; Install
 ;--------------------------------------------------------------------------
@@ -187,6 +217,7 @@ Section "soundMatik" SecMain
 
   ; 3) Clean up any older panel folders BEFORE installing the new one
   !insertmacro RemovePanelFolders "install"
+  !insertmacro RemoveStorageFolders "install"
 
   ; 4) Panel -> %APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel_<VERSION>
   DetailPrint "Installing panel to ${PANEL_DIR} ..."
@@ -256,6 +287,7 @@ Section "Uninstall"
 
   ; Remove panel folder(s)
   !insertmacro RemovePanelFolders "uninstall"
+  !insertmacro RemoveStorageFolders "uninstall"
 
   ; Remove the helper folder (also holds register-panel.ps1 and Uninstall.exe;
   ; the running uninstaller has already relocated itself to %TEMP%, so this
