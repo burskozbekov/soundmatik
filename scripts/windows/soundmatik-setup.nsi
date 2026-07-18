@@ -94,6 +94,11 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
 ;--------------------------------------------------------------------------
 !include "MUI2.nsh"
 !include "FileFunc.nsh"   ; ${GetSize}
+!include "LogicLib.nsh"   ; ${If}/${Else}, ${FileExists}
+
+; Full path to Adobe's Unified Plugin Installer Agent, or "" if Creative Cloud
+; Desktop isn't installed. Set by FindUPIA.
+Var UPIA
 
 ;--------------------------------------------------------------------------
 ; MUI pages
@@ -107,7 +112,7 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
 !insertmacro MUI_PAGE_INSTFILES
 
 !define MUI_FINISHPAGE_TITLE "${PRODUCT} is installed"
-!define MUI_FINISHPAGE_TEXT "Almost done!$\r$\n$\r$\n1. Fully quit Adobe Premiere Pro (close every window), then reopen it.$\r$\n$\r$\n2. Open the panel from:   Window > Extensions (UXP) > soundMatik$\r$\n$\r$\nThen paste a video link into the panel to pull its audio (WAV or MP3) straight into your project's SOUND_EFFECTS bin."
+!define MUI_FINISHPAGE_TEXT "Almost done!$\r$\n$\r$\n1. Fully quit Adobe Premiere Pro (close every window), then reopen it.$\r$\n$\r$\n2. Open the panel from:   Window > UXP Plugins > soundMatik$\r$\n$\r$\nThen paste a video link into the panel to pull its audio (WAV or MP3) straight into your project's SOUND_EFFECTS bin."
 !define MUI_FINISHPAGE_LINK "${PRODUCT} on GitHub"
 !define MUI_FINISHPAGE_LINK_LOCATION "${WEBSITE}"
 !insertmacro MUI_PAGE_FINISH
@@ -121,6 +126,23 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
 ;--------------------------------------------------------------------------
 ; Helpers
 ;--------------------------------------------------------------------------
+
+; Locate Adobe's Unified Plugin Installer Agent (ships with Creative Cloud
+; Desktop). It's the ONLY reliable way to register a UXP panel so Premiere
+; loads it -- a hand-written premierepro.json entry is not a load path Premiere
+; honors. Checks the 64- and 32-bit Common Files roots. Sets $UPIA ("" if none).
+!macro FindUPIA
+  StrCpy $UPIA ""
+  StrCpy $R6 "$PROGRAMFILES64\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe"
+  ${If} ${FileExists} "$R6"
+    StrCpy $UPIA "$R6"
+  ${Else}
+    StrCpy $R6 "$PROGRAMFILES32\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe"
+    ${If} ${FileExists} "$R6"
+      StrCpy $UPIA "$R6"
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 ; Stop a running helper so its .exe files aren't locked during copy/removal.
 ; /T kills the ffmpeg/deno child tree too; then give the OS + any AV real-time
@@ -208,18 +230,39 @@ Section "soundMatik" SecMain
   DetailPrint "Installing helper to $INSTDIR ..."
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}/helper/${HELPER_EXE}"
-  File "${PAYLOAD}/register-panel.ps1"       ; bundled so uninstall can un-register
+  File "${PAYLOAD}/register-panel.ps1"       ; bundled for the manual fallback
+  File "${PAYLOAD}/soundMatik.ccx"           ; panel package for the UPIA install
   SetOutPath "$INSTDIR\bin\win"
   File "${PAYLOAD}/helper/bin/win/yt-dlp.exe"
   File "${PAYLOAD}/helper/bin/win/ffmpeg.exe"
   File "${PAYLOAD}/helper/bin/win/ffprobe.exe"
   File "${PAYLOAD}/helper/bin/win/deno.exe"
 
-  ; 3) Clean up any older panel folders BEFORE installing the new one
+  ; 3) Clean up any older panel copies (folders + stale UXP storage) first.
   !insertmacro RemovePanelFolders "install"
   !insertmacro RemoveStorageFolders "install"
 
-  ; 4) Panel -> %APPDATA%\Adobe\UXP\Plugins\External\com.soundmatik.panel_<VERSION>
+  ; 4) Install the panel the way Adobe actually loads it: hand the .ccx to the
+  ;    Unified Plugin Installer Agent -- exactly what double-clicking the .ccx in
+  ;    Creative Cloud does. Premiere does NOT honor a hand-written
+  ;    premierepro.json entry, so UPIA is the primary path.
+  !insertmacro FindUPIA
+  ${If} $UPIA != ""
+    DetailPrint "Installing panel via Adobe Creative Cloud plugin installer..."
+    nsExec::ExecToLog '"$UPIA" /install "$INSTDIR\soundMatik.ccx"'
+    Pop $0
+    ${If} $0 == "0"
+      DetailPrint "Panel installed and registered with Premiere Pro."
+      Goto panel_done
+    ${EndIf}
+    DetailPrint "UPIA returned $0 - falling back to a manual install."
+  ${Else}
+    DetailPrint "Creative Cloud plugin installer not found - manual install."
+  ${EndIf}
+
+  ; 4b) Fallback (no Creative Cloud, or UPIA failed): copy the panel into the
+  ;     External folder and register it. This route needs the user to enable
+  ;     Developer Mode in Premiere.
   DetailPrint "Installing panel to ${PANEL_DIR} ..."
   SetOutPath "${PANEL_DIR}"
   File "${PAYLOAD}/panel/manifest.json"
@@ -231,19 +274,10 @@ Section "soundMatik" SecMain
   File "${PAYLOAD}/panel/icons/icon@2x.png"
   File "${PAYLOAD}/panel/icons/plugin-icon.png"
   File "${PAYLOAD}/panel/icons/plugin-icon@2x.png"
-
-  ; 5) Merge the registry entry (preserving other plugins) via the proven PS1.
-  ;    premierepro.json is what Premiere actually reads to load UXP panels.
-  DetailPrint "Registering panel with Premiere Pro..."
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\register-panel.ps1" -Version "${VERSION}"'
   Pop $0
-  StrCmp $0 "0" reg_ok 0
-    DetailPrint "WARNING: panel registration returned: $0"
-    ; The most common cause is a corrupt existing premierepro.json (which the
-    ; ps1 refuses to overwrite). Point the user straight at the fix - just
-    ; "run the installer again" would hit the same corrupt file and loop.
-    MessageBox MB_OK|MB_ICONEXCLAMATION "soundMatik was copied, but registering it with Premiere Pro failed.$\r$\n$\r$\nThe panel may not appear under Window > Extensions (UXP). Most often this means Premiere's plugin list is corrupt. To fix it:$\r$\n$\r$\n1. Delete this file:$\r$\n   %APPDATA%\Adobe\UXP\PluginsInfo\v1\premierepro.json$\r$\n2. Run this installer again."
-  reg_ok:
+  MessageBox MB_OK|MB_ICONINFORMATION "soundMatik's panel files are installed, but Adobe Creative Cloud wasn't available to register the panel automatically.$\r$\n$\r$\nTo make the panel appear:$\r$\n1. Open Premiere Pro > Settings > Plugins$\r$\n2. Tick 'Enable developer mode'$\r$\n3. Fully quit and reopen Premiere Pro$\r$\n$\r$\nThen: Window > UXP Plugins > soundMatik"
+  panel_done:
 
   ; 6) Write uninstaller + Add/Remove Programs (HKCU, per-user)
   SetOutPath "$INSTDIR"
@@ -277,10 +311,17 @@ Section "Uninstall"
   Pop $0
   Sleep 600
 
-  ; Un-register from premierepro.json (removes ONLY soundMatik's entry,
-  ; preserving other plugins). Must run before we delete $INSTDIR.
+  ; Un-register the panel. First via UPIA (undoes the Creative Cloud install),
+  ; then the manual premierepro.json entry (undoes the fallback path). Both are
+  ; harmless no-ops if that path wasn't used. Must run before we delete $INSTDIR.
+  !insertmacro FindUPIA
+  ${If} $UPIA != ""
+    DetailPrint "Removing panel via Adobe Creative Cloud plugin installer..."
+    nsExec::ExecToLog '"$UPIA" /remove com.soundmatik.panel'
+    Pop $0
+  ${EndIf}
   IfFileExists "$INSTDIR\register-panel.ps1" 0 skip_unreg
-    DetailPrint "Removing panel registration from Premiere Pro..."
+    DetailPrint "Removing manual panel registration..."
     nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\register-panel.ps1" -Remove'
     Pop $0
   skip_unreg:

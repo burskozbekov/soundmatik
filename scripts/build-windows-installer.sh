@@ -53,6 +53,16 @@ cp "$PANEL/dist/index.js" "$STAGE/panel/dist/"
 cp "$PANEL/icons/"{icon.png,icon@2x.png,plugin-icon.png,plugin-icon@2x.png} "$STAGE/panel/icons/"
 cp "$REGPS1" "$STAGE/register-panel.ps1"
 
+# Build the .ccx the installer hands to Adobe's UPIA (the real load path). A
+# .ccx is just a flat zip of the panel (manifest + index.html + dist + icons).
+log "Building soundMatik.ccx ..."
+CCXSTAGE="$OUT/_ccx"; rm -rf "$CCXSTAGE"; mkdir -p "$CCXSTAGE/dist"
+cp "$PANEL/manifest.json" "$PANEL/index.html" "$CCXSTAGE/"
+cp "$PANEL/dist/index.js" "$CCXSTAGE/dist/"
+cp -R "$PANEL/icons" "$CCXSTAGE/"; rm -rf "$CCXSTAGE/icons/source"
+( cd "$CCXSTAGE" && zip -qr "$STAGE/soundMatik.ccx" . )
+rm -rf "$CCXSTAGE"
+
 # ── Compile ────────────────────────────────────────────────────────────────
 log "Compiling with makensis (LZMA solid on ~330MB — takes a couple of minutes)..."
 rm -f "$EXE_OUT"

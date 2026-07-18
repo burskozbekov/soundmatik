@@ -70,6 +70,22 @@ Copy-Item (Join-Path $panel "icons\plugin-icon.png") (Join-Path $stage "panel\ic
 Copy-Item (Join-Path $panel "icons\plugin-icon@2x.png") (Join-Path $stage "panel\icons")
 Copy-Item $regps1 (Join-Path $stage "register-panel.ps1")
 
+# Build the .ccx the installer hands to Adobe's UPIA (the real load path):
+# a flat zip of the panel (manifest + index.html + dist + icons).
+$ccxStage = Join-Path $out "_ccx"
+if (Test-Path $ccxStage) { Remove-Item $ccxStage -Recurse -Force }
+New-Item -ItemType Directory -Force (Join-Path $ccxStage "dist") | Out-Null
+Copy-Item (Join-Path $panel "manifest.json") $ccxStage
+Copy-Item (Join-Path $panel "index.html") $ccxStage
+Copy-Item (Join-Path $panel "dist\index.js") (Join-Path $ccxStage "dist")
+Copy-Item (Join-Path $panel "icons") $ccxStage -Recurse
+Remove-Item (Join-Path $ccxStage "icons\source") -Recurse -Force -ErrorAction SilentlyContinue
+$ccxZip = Join-Path $out "soundMatik.zip"
+if (Test-Path $ccxZip) { Remove-Item $ccxZip -Force }
+Compress-Archive -Path (Join-Path $ccxStage "*") -DestinationPath $ccxZip
+Move-Item $ccxZip (Join-Path $stage "soundMatik.ccx") -Force
+Remove-Item $ccxStage -Recurse -Force
+
 Write-Host "5/5 Compiling installer with makensis..."
 $exeOut = Join-Path $out "soundMatik-Setup.exe"
 if (Test-Path $exeOut) { Remove-Item $exeOut -Force }
