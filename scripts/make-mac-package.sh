@@ -33,6 +33,16 @@ APP_NAME="soundMatik Helper.app"
 
 NOTARY_PROFILE="${SM_NOTARY_PROFILE:-soundmatik-notary}"
 
+# Auto-load locally stored notarization credentials, if present. This machine's
+# keychain evicts notarytool profiles unpredictably, so a 600-perm env file
+# with SM_APPLE_ID/SM_TEAM_ID/SM_APP_PW is the reliable path; nsubmit() below
+# prefers those over the keychain profile. Explicit env vars still win.
+NOTARY_ENV="$HOME/.config/soundmatik/notary.env"
+if [ -z "${SM_APP_PW:-}" ] && [ -f "$NOTARY_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$NOTARY_ENV"
+fi
+
 log() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
 die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 
